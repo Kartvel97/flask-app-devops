@@ -1,0 +1,134 @@
+---
+- name: Setup Swap File for EC2 Instance
+  hosts: flask
+  become: true
+  vars:
+    swap_size_gb: 1  # Размер swap файла в GB (можно изменить, но на t3.micro обычно только 8GB диска)
+    swap_file: /swapfile
+  
+  tasks:
+    - name: Check if swap already exists
+      shell: swapon --show | grep -q "{{ swap_file }}" || echo "no_swap"
+      register: swap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display current swap status
+      debug:
+        msg: "Current swap status: {{ swap_check.stdout }}"
+
+    - name: Check current swap usage
+      shell: free -h | grep Swap
+      register: current_swap
+      changed_when: false
+      failed_when: false
+
+    - name: Show current swap
+      debug:
+        msg: "{{ current_swap.stdout }}"
+
+    - name: Skip if swap already exists
+      block:
+        - name: Check swap file size if exists
+          stat:
+            path: "{{ swap_file }}"
+          register: swap_file_stat
+
+        - name: Show existing swap file info
+          debug:
+            msg: "Swap file already exists: {{ swap_file }} ({{ swap_file_stat.stat.size | default(0) | int / 1024 / 1024 / 1024 }} GB)"
+      when: swap_check.stdout != "no_swap"
+
+    - name: Check available disk space
+      shell: df -h / | tail -1 | awk '{print $4}'
+      register: available_space
+      changed_when: false
+
+    - name: Show available disk space
+      debug:
+        msg: "Available disk space: {{ available_space.stdout }}"
+
+    - name: Clean up Docker to free space (if needed)
+      block:
+        - name: Remove unused Docker images
+          shell: sudo docker image prune -af --filter "until=24h"
+          register: docker_cleanup
+          failed_when: false
+
+        - name: Remove unused Docker build cache
+          shell: sudo docker builder prune -af
+          register: docker_cache_cleanup
+          failed_when: false
+
+        - name: Show cleanup results
+          debug:
+            msg: "Docker cleanup completed"
+      when: available_space.stdout | regex_search('K|M') or available_space.stdout | int < 500
+
+    - name: Create swap file
+      block:
+        - name: Allocate swap file ({{ swap_size_gb }}GB)
+          command: fallocate -l {{ swap_size_gb }}G {{ swap_file }}
+          args:
+            creates: "{{ swap_file }}"
+
+        - name: Set correct permissions on swap file
+          file:
+            path: "{{ swap_file }}"
+            mode: '0600'
+            owner: root
+            group: root
+
+        - name: Format file as swap
+          command: mkswap {{ swap_file }}
+          args:
+            creates: "{{ swap_file }}.formatted"
+          register: mkswap_result
+
+        - name: Mark swap file as formatted
+          file:
+            path: "{{ swap_file }}.formatted"
+            state: touch
+          when: mkswap_result.rc == 0
+
+        - name: Enable swap file
+          command: swapon {{ swap_file }}
+
+        - name: Add swap to /etc/fstab for persistence
+          lineinfile:
+            path: /etc/fstab
+            line: "{{ swap_file }} none swap sw 0 0"
+            regexp: "^{{ swap_file | regex_escape() }}"
+            state: present
+            backup: yes
+
+        - name: Verify swap is active
+          shell: swapon --show
+          register: swap_active
+
+        - name: Show swap status
+          debug:
+            msg: "{{ swap_active.stdout_lines }}"
+
+        - name: Show memory and swap info
+          shell: free -h
+          register: memory_info
+
+        - name: Display memory and swap
+          debug:
+            msg: "{{ memory_info.stdout_lines }}"
+      when: swap_check.stdout == "no_swap"
+
+    - name: Final verification
+      shell: |
+        echo "=== Swap Status ==="
+        swapon --show
+        echo ""
+        echo "=== Memory + Swap ==="
+        free -h
+      register: final_status
+
+    - name: Show final status
+      debug:
+        msg: "{{ final_status.stdout_lines }}"
+

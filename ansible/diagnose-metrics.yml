@@ -1,0 +1,81 @@
+---
+- name: Diagnose Metrics Collection Issues
+  hosts: flask
+  become: yes
+  tasks:
+    - name: Check if Flask container is in monitoring network
+      shell: sudo docker network inspect monitoring 2>/dev/null | grep -A 5 flask-app || echo "NOT_FOUND"
+      register: network_check
+      
+    - name: Display network check result
+      debug:
+        msg: "{{ network_check.stdout }}"
+        
+    - name: Connect Flask app to monitoring network if not connected
+      shell: sudo docker network connect monitoring flask-app 2>&1 || echo "Already connected or error"
+      register: network_connect
+      when: "'NOT_FOUND' in network_check.stdout"
+      
+    - name: Display network connect result
+      debug:
+        msg: "{{ network_connect.stdout }}"
+        
+    - name: Check if Flask metrics endpoint is accessible
+      uri:
+        url: http://localhost:5000/metrics
+        method: GET
+        return_content: yes
+      register: metrics_check
+      ignore_errors: yes
+      
+    - name: Display metrics check result
+      debug:
+        msg: "{{ metrics_check.content | default('Cannot access metrics endpoint') }}"
+        
+    - name: Generate test requests to Flask app
+      shell: |
+        for i in {1..5}; do
+          curl -s http://localhost:5000/ > /dev/null
+          curl -s http://localhost:5000/health > /dev/null
+        done
+        echo "Test requests completed"
+      register: test_requests
+      
+    - name: Display test requests result
+      debug:
+        msg: "{{ test_requests.stdout }}"
+        
+    - name: Check Prometheus targets
+      uri:
+        url: http://localhost:9090/api/v1/targets
+        method: GET
+        return_content: yes
+      register: prometheus_targets
+      ignore_errors: yes
+      
+    - name: Display Prometheus targets for flask-app
+      debug:
+        msg: "{{ prometheus_targets.json.data.activeTargets | selectattr('labels.job', 'equalto', 'flask-app') | list | default('Flask app target not found') }}"
+      when: prometheus_targets.json is defined
+      
+    - name: Check metrics after test requests
+      shell: |
+        sleep 3
+        curl -s http://localhost:5000/metrics | grep -E "http_requests_total|# HELP" | head -10
+      register: metrics_after_requests
+      
+    - name: Display metrics after requests
+      debug:
+        msg: "{{ metrics_after_requests.stdout }}"
+        
+    - name: Reload Prometheus configuration
+      uri:
+        url: http://localhost:9090/-/reload
+        method: POST
+      ignore_errors: yes
+      
+    - name: Summary
+      debug:
+        msg: |
+          Диагностика завершена!
+

@@ -1,0 +1,112 @@
+---
+- name: Deploy Monitoring Stack
+  hosts: flask
+  become: yes
+  tasks:
+    - name: Install Docker dependencies
+      apt:
+        name:
+          - docker.io
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install Docker Compose
+      shell: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+      args:
+        creates: /usr/local/bin/docker-compose
+
+    - name: Create monitoring directory
+      file:
+        path: /opt/monitoring
+        state: directory
+        mode: '0755'
+
+    - name: Copy monitoring configuration
+      copy:
+        src: "{{ item }}"
+        dest: /opt/monitoring/
+        mode: '0644'
+      loop:
+        - ../monitoring/docker-compose.monitoring.yml
+
+    - name: Create prometheus configuration directory
+      file:
+        path: /opt/monitoring/prometheus
+        state: directory
+        mode: '0755'
+
+    - name: Copy prometheus configuration files
+      copy:
+        src: "{{ item }}"
+        dest: /opt/monitoring/prometheus/
+        mode: '0644'
+      loop:
+        - ../monitoring/prometheus/prometheus.yml
+        - ../monitoring/prometheus/alerts.yml
+        - ../monitoring/prometheus/alertmanager.yml
+
+    - name: Create grafana configuration directories
+      file:
+        path: "/opt/monitoring/grafana/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - provisioning/datasources
+        - provisioning/dashboards
+        - dashboards
+
+    - name: Copy grafana configuration files
+      copy:
+        src: "{{ item }}"
+        dest: /opt/monitoring/grafana/
+        mode: '0644'
+      loop:
+        - ../monitoring/grafana/provisioning/datasources/prometheus.yml
+        - ../monitoring/grafana/provisioning/dashboards/dashboards.yml
+        - ../monitoring/grafana/dashboards/flask-app-dashboard.json
+
+    - name: Start monitoring stack
+      shell: |
+        cd /opt/monitoring && sudo docker-compose -f docker-compose.monitoring.yml up -d
+
+    - name: Wait for services to start
+      wait_for:
+        port: "{{ item }}"
+        host: '127.0.0.1'
+        delay: 10
+        timeout: 60
+      loop:
+        - 9090  # Prometheus
+        - 3000  # Grafana
+
+    - name: Check container status
+      shell: |
+        sudo docker ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
+      register: container_status
+
+    - name: Display container status
+      debug:
+        msg: "{{ container_status.stdout }}"
+
+    - name: Print monitoring access information
+      debug:
+        msg: |
+          Monitoring stack deployed successfully!
+          
+          Access URLs:
+          - Prometheus: http://{{ inventory_hostname }}:9090
+          - Grafana: http://{{ inventory_hostname }}:3000 (admin/admin123)
+          - Node Exporter: http://{{ inventory_hostname }}:9100
+          - cAdvisor: http://{{ inventory_hostname }}:8080
+          - Alertmanager: http://{{ inventory_hostname }}:9093
+          
+          Flask App Metrics: http://{{ inventory_hostname }}:5000/metrics

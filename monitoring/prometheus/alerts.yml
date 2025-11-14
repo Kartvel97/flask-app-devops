@@ -1,0 +1,116 @@
+groups:
+  - name: flask_app_alerts
+    rules:
+      - alert: FlaskAppDown
+        expr: up{job="flask-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Flask application is down"
+          description: "The Flask application has been down for more than 1 minute."
+
+      - alert: HighRequestLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request latency"
+          description: "The 95th percentile of request latency is above 1 second."
+
+  - name: system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 80% for 5 minutes."
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 85% for 5 minutes."
+
+      - alert: DiskSpaceLow
+        expr: (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 10%."
+
+  - name: application_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status_code=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate (5xx) is above 10% for 2 minutes. Current rate: {{ $value | humanizePercentage }}"
+
+      - alert: High4xxErrorRate
+        expr: rate(http_requests_total{status_code=~"4.."}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 4xx error rate"
+          description: "4xx error rate is above 20% for 5 minutes. Current rate: {{ $value | humanizePercentage }}"
+
+      - alert: ContainerRestartLoop
+        expr: rate(container_last_seen{name="flask-app"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container restart loop detected"
+          description: "Flask app container is restarting frequently. This may indicate a crash loop."
+
+      - alert: HighRequestLatencyP99
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Very high request latency (P99)"
+          description: "99th percentile of request latency is above 2 seconds for 5 minutes. Current: {{ $value }}s"
+
+      - alert: LowRequestRate
+        expr: rate(http_requests_total[5m]) < 0.01
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low request rate"
+          description: "Request rate is very low (< 0.01 req/s) for 10 minutes. Service may be idle or unreachable."
+
+  - name: monitoring_alerts
+    rules:
+      - alert: PrometheusTargetDown
+        expr: up{job!="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus target is down"
+          description: "Target {{ $labels.job }} has been down for more than 2 minutes."
+
+      - alert: PrometheusHighMemoryUsage
+        expr: process_resident_memory_bytes{job="prometheus"} > 2147483648
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus high memory usage"
+          description: "Prometheus is using more than 2GB of memory."

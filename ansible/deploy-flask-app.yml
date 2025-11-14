@@ -1,0 +1,124 @@
+---
+- name: Deploy Flask App to AWS
+  hosts: flask
+  become: true
+  vars:
+    app_directory: /opt/flask-app
+    docker_image_name: flask-app
+    container_name: flask-app
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required system packages
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - git
+          - curl
+        state: present
+
+    # Enable Docker BuildKit for faster builds (learned from Docker documentation)
+    - name: Configure Docker to use BuildKit
+      copy:
+        content: |
+          {
+            "features": {
+              "buildkit": true
+            }
+          }
+        dest: /etc/docker/daemon.json
+      notify: restart docker
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Clone application repository
+      git:
+        repo: 'https://github.com/Kartvel97/flask-app-devops.git'
+        dest: "{{ app_directory }}"
+        version: main
+        force: yes
+
+    - name: Check if src directory exists
+      stat:
+        path: "{{ app_directory }}/src"
+      register: src_dir
+
+    - name: Check if Dockerfile exists
+      stat:
+        path: "{{ app_directory }}/docker/Dockerfile"
+      register: dockerfile
+
+    - name: Show structure verification
+      debug:
+        msg:
+          - "src directory: {{ src_dir.stat.exists }}"
+          - "Dockerfile: {{ dockerfile.stat.exists }}"
+
+    - name: Stop and remove existing container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: yes
+      ignore_errors: yes
+
+    - name: Remove old Docker image
+      community.docker.docker_image:
+        name: "{{ docker_image_name }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: "{{ docker_image_name }}"
+        source: build
+        build:
+          path: "{{ app_directory }}"
+          dockerfile: docker/Dockerfile
+          nocache: yes
+        state: present
+
+    - name: Run Flask container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ docker_image_name }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "5000:5000"
+        env:
+          FLASK_APP: "src/app.py"
+          FLASK_ENV: "production"
+
+    - name: Wait for application to start
+      wait_for:
+        port: 5000
+        host: 127.0.0.1
+        timeout: 30
+        delay: 5
+
+    - name: Test application health endpoint
+      uri:
+        url: http://localhost:5000/health
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: health_check
+
+    - name: Show deployment result
+      debug:
+        msg: "Application deployed successfully! Health check: {{ health_check.status }}"
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted

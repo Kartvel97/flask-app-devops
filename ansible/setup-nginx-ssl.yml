@@ -1,0 +1,181 @@
+---
+- name: Clean Nginx + SSL setup for flask.mervel.pp.ua
+  hosts: flask
+  become: true
+  vars:
+    domain_name: "flask.mervel.pp.ua"
+    email: "firebat972@gmail.com"
+
+  tasks:
+    # ==================== 
+    # STOP NGINX AND CLEAN EXISTING CONFIG
+    # ====================
+    - name: Stop Nginx
+      systemd:
+        name: nginx
+        state: stopped
+
+    - name: Remove existing Nginx configs
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/nginx/sites-available/{{ domain_name }}"
+        - "/etc/nginx/sites-enabled/{{ domain_name }}"
+        - "/etc/nginx/sites-available/{{ domain_name }}-temp"
+        - "/etc/nginx/sites-enabled/{{ domain_name }}-temp"
+
+    - name: Start Nginx with clean config
+      systemd:
+        name: nginx
+        state: started
+
+    # ==================== 
+    # OBTAIN SSL CERTIFICATE FIRST (STANDALONE MODE)
+    # ====================
+    - name: Install certbot
+      apt:
+        name:
+          - certbot
+        state: present
+
+    - name: Obtain SSL certificate using standalone mode
+      command: |
+        certbot certonly --standalone -d {{ domain_name }} --non-interactive --agree-tos --email {{ email }} --http-01-port=80
+      register: certbot_result
+      changed_when: "'Congratulations' in certbot_result.stdout"
+
+    - name: Show Certbot result
+      debug:
+        var: certbot_result.stdout
+
+    # ==================== 
+    # CONFIGURE NGINX WITH SSL AND RATE LIMITING
+    # ====================
+    - name: Create Nginx main configuration with rate limiting
+      copy:
+        content: |
+          # Rate limiting zones
+          limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+          limit_req_zone $binary_remote_addr zone=general_limit:10m rate=30r/s;
+          
+          # Connection limiting
+          limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+        dest: /etc/nginx/conf.d/rate-limiting.conf
+
+    - name: Create Nginx SSL configuration
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }};
+              return 301 https://$host$request_uri;
+          }
+
+          server {
+              listen 443 ssl http2;
+              server_name {{ domain_name }};
+
+              ssl_certificate /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
+
+              # Security headers
+              add_header X-Frame-Options "SAMEORIGIN" always;
+              add_header X-XSS-Protection "1; mode=block" always;
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header Referrer-Policy "no-referrer-when-downgrade" always;
+              add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+              # Connection limit
+              limit_conn conn_limit 10;
+
+              # API endpoints with stricter rate limiting
+              location ~ ^/(api|metrics) {
+                  limit_req zone=api_limit burst=20 nodelay;
+                  limit_req_status 429;
+                  
+                  proxy_pass http://localhost:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              # General endpoints with standard rate limiting
+              location / {
+                  limit_req zone=general_limit burst=50 nodelay;
+                  limit_req_status 429;
+                  
+                  proxy_pass http://localhost:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              # Health check endpoint - no rate limiting
+              location /health {
+                  proxy_pass http://localhost:5000/health;
+                  proxy_set_header Host $host;
+                  access_log off;
+              }
+          }
+        dest: /etc/nginx/sites-available/{{ domain_name }}
+
+    - name: Enable Nginx site
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_name }}"
+        dest: "/etc/nginx/sites-enabled/{{ domain_name }}"
+        state: link
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Show Nginx test result
+      debug:
+        var: nginx_test.stdout
+
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Allow HTTPS in firewall
+      ufw:
+        rule: allow
+        port: '443'
+        proto: tcp
+
+    # ==================== 
+    # FINAL CHECKS
+    # ====================
+    - name: Test HTTP to HTTPS redirect
+      uri:
+        url: http://{{ domain_name }}/health
+        method: GET
+        status_code: 301
+        timeout: 10
+      register: http_test
+
+    - name: Test HTTPS endpoint
+      uri:
+        url: https://{{ domain_name }}/health
+        method: GET
+        status_code: 200
+        timeout: 10
+        validate_certs: no
+      register: https_test
+
+    - name: Show final results
+      debug:
+        msg:
+          - "HTTP redirect: {{ http_test.status }}"
+          - "HTTPS access: {{ https_test.status }}"
+          - "SSL setup completed successfully!"

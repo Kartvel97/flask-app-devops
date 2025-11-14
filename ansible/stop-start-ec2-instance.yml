@@ -1,0 +1,145 @@
+---
+- name: Stop and Start EC2 Instance (Full Restart)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    instance_name: "flask-app-devops"
+    region: "eu-central-1"
+
+  tasks:
+    - name: Get EC2 instance ID by name tag
+      shell: |
+        aws ec2 describe-instances \
+          --region {{ region }} \
+          --filters "Name=tag:Name,Values={{ instance_name }}" \
+          --query 'Reservations[*].Instances[*].[InstanceId,State.Name,PublicIpAddress]' \
+          --output json
+      register: ec2_info_json
+      changed_when: false
+
+    - name: Parse instance information
+      set_fact:
+        ec2_info: "{{ ec2_info_json.stdout | from_json }}"
+
+    - name: Get instance details
+      set_fact:
+        instance_id: "{{ ec2_info[0][0][0] }}"
+        instance_state: "{{ ec2_info[0][0][1] }}"
+        instance_ip: "{{ ec2_info[0][0][2] | default('N/A') }}"
+
+    - name: Display instance information
+      debug:
+        msg:
+          - "Instance ID: {{ instance_id }}"
+          - "Current State: {{ instance_state }}"
+          - "Public IP: {{ instance_ip }}"
+
+    - name: Stop EC2 instance
+      shell: |
+        aws ec2 stop-instances \
+          --region {{ region }} \
+          --instance-ids {{ instance_id }}
+      register: stop_result
+      when: instance_state == "running"
+      changed_when: true
+
+    - name: Wait for instance to stop
+      shell: |
+        aws ec2 describe-instance-status \
+          --region {{ region }} \
+          --instance-ids {{ instance_id }} \
+          --query 'InstanceStatuses[0].InstanceState.Name' \
+          --output text
+      register: instance_state_check
+      until: instance_state_check.stdout == "stopped"
+      retries: 30
+      delay: 10
+      failed_when: false
+      when: instance_state == "running"
+
+    - name: Start EC2 instance
+      shell: |
+        aws ec2 start-instances \
+          --region {{ region }} \
+          --instance-ids {{ instance_id }}
+      register: start_result
+      changed_when: true
+
+    - name: Wait for instance to be running
+      shell: |
+        aws ec2 describe-instance-status \
+          --region {{ region }} \
+          --instance-ids {{ instance_id }} \
+          --query 'InstanceStatuses[0].InstanceState.Name' \
+          --output text
+      register: instance_state_check
+      until: instance_state_check.stdout == "running"
+      retries: 30
+      delay: 10
+      failed_when: false
+
+    - name: Get new public IP (may change after stop/start)
+      shell: |
+        aws ec2 describe-instances \
+          --region {{ region }} \
+          --instance-ids {{ instance_id }} \
+          --query 'Reservations[0].Instances[0].[State.Name,PublicIpAddress,LaunchTime]' \
+          --output json
+      register: final_info_json
+      changed_when: false
+      retries: 5
+      delay: 5
+      until: final_info_json.stdout != "null"
+
+    - name: Parse final instance information
+      set_fact:
+        final_info: "{{ final_info_json.stdout | from_json }}"
+
+    - name: Display restart result
+      debug:
+        msg:
+          - "Instance stop/start completed!"
+          - "Instance ID: {{ instance_id }}"
+          - "New State: {{ final_info[0] }}"
+          - "New Public IP: {{ final_info[1] | default('N/A') }}"
+          - "Launch Time: {{ final_info[2] | default('N/A') }}"
+          - ""
+          - "⏳ Waiting for SSH to be available..."
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ final_info[1] }}"
+        port: 22
+        delay: 30
+        timeout: 300
+        msg: "Waiting for SSH to become available on {{ final_info[1] }}"
+      when: final_info[1] is defined and final_info[1] != "None"
+
+    - name: Update inventory with new IP if changed
+      lineinfile:
+        path: inventory.ini
+        regexp: '^63\.180\.199\.69'
+        line: "{{ final_info[1] }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/flask_app_key"
+        backup: yes
+      when: final_info[1] is defined and final_info[1] != "None" and final_info[1] != "52.29.151.247"
+
+    - name: Display final status
+      debug:
+        msg:
+          - "EC2 instance fully restarted (stop/start)!"
+          - ""
+          - "Instance Information:"
+          - "  - Instance ID: {{ instance_id }}"
+          - "  - Public IP: {{ final_info[1] | default(instance_ip) }}"
+          - "  - State: {{ final_info[0] }}"
+          - "  - Launch Time: {{ final_info[2] | default('N/A') }}"
+          - ""
+          - "Note: Public IP may have changed after stop/start!"
+          - ""
+          - "Next steps:"
+          - "  1. Wait 2-3 minutes for all services to start"
+          - "  2. Check application: curl http://{{ final_info[1] | default(instance_ip) }}:5000/health"
+          - "  3. Check status: ansible-playbook -i inventory.ini check-app-status.yml"
+          - "  4. Restart Flask app if needed: ansible-playbook -i inventory.ini restart-flask-app.yml"
+

@@ -1,0 +1,101 @@
+---
+- name: Setup Automated Backup System
+  hosts: flask
+  become: true
+  vars:
+    backup_dir: /opt/backups
+    backup_retention_days: 7
+
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Copy backup scripts
+      copy:
+        src: "{{ item }}"
+        dest: /usr/local/bin/
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - ../backup/scripts/backup.sh
+        - ../backup/scripts/restore.sh
+        - ../backup/scripts/verify_backup.sh
+
+    - name: Create systemd service for automated backup
+      copy:
+        content: |
+          [Unit]
+          Description=Automated Backup Service for Flask App Stack
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/backup.sh
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/flask-backup.service
+        mode: '0644'
+
+    - name: Create systemd timer for daily backups
+      copy:
+        content: |
+          [Unit]
+          Description=Run Flask App Backup Daily
+          Requires=flask-backup.service
+
+          [Timer]
+          OnCalendar=daily
+          OnCalendar=*-*-* 02:00:00
+          Persistent=true
+          RandomizedDelaySec=3600
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/flask-backup.timer
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start backup timer
+      systemd:
+        name: flask-backup.timer
+        enabled: yes
+        state: started
+
+    - name: Create backup verification cron job (weekly)
+      cron:
+        name: "Verify Flask App Backups"
+        minute: "0"
+        hour: "3"
+        weekday: "0"
+        job: "/usr/local/bin/verify_backup.sh >> /var/log/backup-verify.log 2>&1"
+        user: root
+
+    - name: Display backup information
+      debug:
+        msg:
+          - "Automated backup system configured"
+          - "Backup directory: {{ backup_dir }}"
+          - "Backup retention: {{ backup_retention_days }} days"
+          - "Daily backups scheduled at 02:00 UTC"
+          - "Weekly verification on Sundays at 03:00 UTC"
+          - ""
+          - "Manual backup: /usr/local/bin/backup.sh"
+          - "Restore backup: /usr/local/bin/restore.sh <backup_file>"
+          - "Verify backup: /usr/local/bin/verify_backup.sh [backup_file]"
+          - ""
+          - "Check timer status: systemctl status flask-backup.timer"
+          - "List backups: ls -lh {{ backup_dir }}"
+
