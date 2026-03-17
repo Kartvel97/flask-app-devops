@@ -1,0 +1,49 @@
+---
+- name: Full Restart of Monitoring Stack
+  hosts: flask
+  become: yes
+  tasks:
+    - name: Copy fixed prometheus configuration
+      copy:
+        src: ../monitoring/prometheus/prometheus.yml
+        dest: /opt/monitoring/prometheus/prometheus.yml
+        mode: '0644'
+
+    - name: Stop and remove monitoring stack
+      shell: |
+        cd /opt/monitoring && sudo docker-compose down
+
+    - name: Start monitoring stack
+      shell: |
+        cd /opt/monitoring && sudo docker-compose up -d
+
+    - name: Wait for services to start
+      wait_for:
+        port: "{{ item }}"
+        host: '127.0.0.1'
+        delay: 10
+        timeout: 60
+      loop:
+        - 9090  # Prometheus
+        - 3000  # Grafana
+
+    - name: Check container status
+      shell: |
+        sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: container_status
+
+    - name: Display container status
+      debug:
+        msg: "{{ container_status.stdout }}"
+
+    - name: Print access information
+      debug:
+        msg: |
+          Monitoring stack fully restarted with fixed configuration!
+          
+          Access URLs:
+          - Prometheus: http://{{ inventory_hostname }}:9090
+          - Grafana: http://{{ inventory_hostname }}:3000 (admin/admin123)
+          - Node Exporter: http://{{ inventory_hostname }}:9100
+          - cAdvisor: http://{{ inventory_hostname }}:8080
+          - Alertmanager: http://{{ inventory_hostname }}:9093

@@ -1,0 +1,47 @@
+# Backup Monitoring Alerts
+# Note: These alerts monitor disk space and system metrics related to backups
+# For backup age monitoring, use external monitoring or log-based alerts
+
+groups:
+  - name: backup_alerts
+    interval: 5m
+    rules:
+      # Alert if backup directory disk space is getting low
+      - alert: BackupDiskSpaceLow
+        expr: |
+          (
+            (node_filesystem_avail_bytes{mountpoint="/opt"} / node_filesystem_size_bytes{mountpoint="/opt"}) * 100
+          ) < 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space for backups"
+          description: "Backup directory partition has less than 20% free space. Current: {{ $value | humanize }}% free."
+
+      # Alert if disk space is critically low
+      - alert: BackupDiskSpaceCritical
+        expr: |
+          (
+            (node_filesystem_avail_bytes{mountpoint="/opt"} / node_filesystem_size_bytes{mountpoint="/opt"}) * 100
+          ) < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical disk space for backups"
+          description: "Backup directory partition has less than 10% free space. Backups may fail soon. Current: {{ $value | humanize }}% free."
+
+      # Alert if backup directory inode usage is high
+      - alert: BackupInodeUsageHigh
+        expr: |
+          (
+            (node_filesystem_files_free{mountpoint="/opt"} / node_filesystem_files{mountpoint="/opt"}) * 100
+          ) < 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High inode usage in backup directory"
+          description: "Backup directory partition has less than 20% free inodes. Current: {{ $value | humanize }}% free inodes."
+

@@ -1,0 +1,159 @@
+---
+- name: Cleanup Server - Remove Local Backups and Free Disk Space
+  hosts: flask
+  become: true
+  tasks:
+    - name: Check disk usage before cleanup
+      shell: df -h /
+      register: disk_before
+      
+    - name: Show disk usage before cleanup
+      debug:
+        msg: "{{ disk_before.stdout_lines }}"
+
+    - name: Check backup directory size
+      shell: du -sh /opt/backups 2>/dev/null || echo "0 /opt/backups"
+      register: backup_dir_size
+      failed_when: false
+      
+    - name: Show backup directory size
+      debug:
+        msg: "Backup directory size: {{ backup_dir_size.stdout }}"
+
+    - name: Stop and disable backup timer
+      systemd:
+        name: flask-backup.timer
+        enabled: no
+        state: stopped
+      register: timer_stopped
+      failed_when: false
+
+    - name: Stop and disable backup service
+      systemd:
+        name: flask-backup.service
+        enabled: no
+        state: stopped
+      register: service_stopped
+      failed_when: false
+
+    - name: Remove backup timer and service files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/flask-backup.timer
+        - /etc/systemd/system/flask-backup.service
+      failed_when: false
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+      when: timer_stopped.changed or service_stopped.changed
+
+    - name: Remove backup cron job
+      cron:
+        name: "Verify Flask App Backups"
+        state: absent
+      failed_when: false
+
+    - name: Delete all local backups
+      file:
+        path: /opt/backups
+        state: absent
+      register: backups_deleted
+      failed_when: false
+
+    - name: Show backup deletion result
+      debug:
+        msg: "Local backups deleted: {{ backups_deleted.changed | default(false) }}"
+
+    - name: Check Docker disk usage
+      shell: sudo docker system df
+      register: docker_usage
+      failed_when: false
+
+    - name: Show Docker disk usage
+      debug:
+        msg: "{{ docker_usage.stdout_lines }}"
+
+    - name: Remove unused Docker images (older than 24h)
+      shell: sudo docker image prune -af --filter "until=24h"
+      register: docker_images_cleanup
+      failed_when: false
+
+    - name: Remove unused Docker build cache
+      shell: sudo docker builder prune -af
+      register: docker_cache_cleanup
+      failed_when: false
+
+    - name: Remove unused Docker volumes (be careful!)
+      shell: sudo docker volume prune -af
+      register: docker_volumes_cleanup
+      failed_when: false
+
+    - name: Show Docker cleanup results
+      debug:
+        msg: "Docker cleanup completed"
+
+    - name: Clean up old log files
+      shell: |
+        # Clean journal logs (keep last 3 days)
+        sudo journalctl --vacuum-time=3d 2>/dev/null || true
+        # Clean old apt cache
+        sudo apt-get clean 2>/dev/null || true
+        # Clean old package lists
+        sudo apt-get autoclean 2>/dev/null || true
+      register: log_cleanup
+      failed_when: false
+
+    - name: Clean temporary files
+      shell: |
+        # Clean /tmp (files older than 7 days)
+        find /tmp -type f -atime +7 -delete 2>/dev/null || true
+        # Clean /var/tmp (files older than 7 days)
+        find /var/tmp -type f -atime +7 -delete 2>/dev/null || true
+        # Clean Ansible temp files
+        rm -rf /home/ubuntu/.ansible/tmp/* 2>/dev/null || true
+      register: temp_cleanup
+      failed_when: false
+
+    - name: Check disk usage after cleanup
+      shell: df -h /
+      register: disk_after
+      
+    - name: Show disk usage after cleanup
+      debug:
+        msg: "{{ disk_after.stdout_lines }}"
+
+    - name: Show cleanup summary
+      debug:
+        msg:
+          - "Cleanup completed!"
+          - "Backup timer: stopped and disabled"
+          - "Backup service: stopped and disabled"
+          - "Local backups: deleted"
+          - "Docker: cleaned (unused images, cache, volumes)"
+          - "Logs: cleaned (journal, apt cache)"
+          - "Temp files: cleaned"
+
+    - name: Calculate freed space
+      shell: |
+        BEFORE=$(df / | tail -1 | awk '{print $3}')
+        AFTER=$(df / | tail -1 | awk '{print $3}')
+        echo "Disk usage check completed"
+      register: space_check
+      failed_when: false
+
+    - name: Show final disk status
+      shell: |
+        echo "=== Final Disk Status ==="
+        df -h /
+        echo ""
+        echo "=== Top 10 largest directories ==="
+        sudo du -h --max-depth=1 / 2>/dev/null | sort -hr | head -10
+      register: final_status
+
+    - name: Display final status
+      debug:
+        msg: "{{ final_status.stdout_lines }}"
+

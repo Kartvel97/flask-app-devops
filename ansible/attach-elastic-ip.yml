@@ -1,0 +1,86 @@
+---
+- name: Attach Elastic IP to existing EC2 instance
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    instance_name: "flask-app-devops"
+    region: "eu-central-1"
+    use_existing_eip: false  # Set to true if you want to use existing EIP
+
+  tasks:
+    - name: Get current instance ID
+      shell: |
+        aws ec2 describe-instances \
+          --region {{ region }} \
+          --filters "Name=tag:Name,Values={{ instance_name }}" "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text
+      register: instance_id
+      changed_when: false
+
+    - name: Check if instance has Elastic IP
+      shell: |
+        aws ec2 describe-addresses \
+          --region {{ region }} \
+          --filters "Name=instance-id,Values={{ instance_id.stdout }}" \
+          --query 'Addresses[0].AllocationId' \
+          --output text
+      register: existing_eip
+      changed_when: false
+      failed_when: false
+
+    - name: Display current status
+      debug:
+        msg:
+          - "Instance ID: {{ instance_id.stdout }}"
+          - "Current Elastic IP: {{ existing_eip.stdout if existing_eip.stdout != 'None' else 'None (using dynamic IP)' }}"
+
+    - name: Allocate new Elastic IP
+      shell: |
+        aws ec2 allocate-address \
+          --domain vpc \
+          --region {{ region }} \
+          --tag-specifications 'ResourceType=elastic-ip,Tags=[{Key=Name,Value=flask-app-devops-eip}]' \
+          --query 'AllocationId' \
+          --output text
+      register: new_eip_allocation
+      when: existing_eip.stdout == "None" or existing_eip.stdout == ""
+      changed_when: true
+
+    - name: Associate Elastic IP with instance
+      shell: |
+        aws ec2 associate-address \
+          --instance-id {{ instance_id.stdout }} \
+          --allocation-id {{ new_eip_allocation.stdout if (existing_eip.stdout == 'None' or existing_eip.stdout == '') else existing_eip.stdout }} \
+          --region {{ region }}
+      register: eip_association
+      changed_when: true
+      when: existing_eip.stdout == "None" or existing_eip.stdout == ""
+
+    - name: Get Elastic IP address
+      shell: |
+        aws ec2 describe-addresses \
+          --region {{ region }} \
+          --allocation-ids {{ new_eip_allocation.stdout if (existing_eip.stdout == 'None' or existing_eip.stdout == '') else existing_eip.stdout }} \
+          --query 'Addresses[0].PublicIp' \
+          --output text
+      register: eip_address
+      changed_when: false
+
+    - name: Display result
+      debug:
+        msg:
+          - "Elastic IP configured!"
+          - ""
+          - "Elastic IP Address: {{ eip_address.stdout }}"
+          - "Allocation ID: {{ new_eip_allocation.stdout if (existing_eip.stdout == 'None' or existing_eip.stdout == '') else existing_eip.stdout }}"
+          - ""
+          - "Important: Update your Cloudflare DNS with this IP: {{ eip_address.stdout }}"
+          - "This IP will NOT change when you restart the instance!"
+          - ""
+          - "Next steps:"
+          - "  1. Update Cloudflare DNS A record to: {{ eip_address.stdout }}"
+          - "  2. Update ansible/inventory.ini with new IP"
+          - "  3. Update terraform output if needed"
+

@@ -1,0 +1,75 @@
+---
+- name: Restart Flask App to Fix 504 Error
+  hosts: flask
+  become: true
+  vars:
+    container_name: flask-app
+
+  tasks:
+    - name: Check current container status
+      shell: sudo docker ps -a | grep {{ container_name }} || echo "Container not found"
+      register: container_status
+
+    - name: Show container status
+      debug:
+        msg: "{{ container_status.stdout }}"
+
+    - name: Stop Flask app container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+      ignore_errors: yes
+
+    - name: Remove Flask app container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: yes
+      ignore_errors: yes
+
+    - name: Start Flask app container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: flask-app
+        state: started
+        restart_policy: always
+        ports:
+          - "5000:5000"
+        env:
+          FLASK_APP: "src/app.py"
+          FLASK_ENV: "production"
+
+    - name: Wait for application to start
+      wait_for:
+        port: 5000
+        host: 127.0.0.1
+        timeout: 60
+        delay: 5
+
+    - name: Test application health endpoint
+      uri:
+        url: http://localhost:5000/health
+        method: GET
+        timeout: 10
+      register: health_check
+      retries: 5
+      delay: 3
+      until: health_check.status == 200
+      ignore_errors: yes
+
+    - name: Show restart result
+      debug:
+        msg: |
+          Flask app restart completed!
+          Health check status: {{ health_check.status | default('CHECKING...') }}
+          If status is not 200, check logs: sudo docker logs {{ container_name }}
+
+    - name: Show container logs (last 20 lines)
+      shell: sudo docker logs {{ container_name }} --tail 20 2>&1
+      register: logs
+      ignore_errors: yes
+
+    - name: Display logs
+      debug:
+        msg: "{{ logs.stdout_lines }}"
+

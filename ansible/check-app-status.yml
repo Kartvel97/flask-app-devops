@@ -1,0 +1,72 @@
+---
+- name: Check Flask App Status and Diagnose 504 Error
+  hosts: flask
+  become: true
+  tasks:
+    - name: Check Docker service status
+      systemd:
+        name: docker
+      register: docker_status
+
+    - name: Show Docker service status
+      debug:
+        msg: "Docker service is {{ docker_status.status.ActiveState }}"
+
+    - name: Check all running containers
+      shell: sudo docker ps -a
+      register: containers
+
+    - name: Show container status
+      debug:
+        msg: "{{ containers.stdout_lines }}"
+
+    - name: Check Flask app container status
+      shell: sudo docker ps -a | grep flask-app || echo "Flask app container not found"
+      register: flask_container
+
+    - name: Show Flask container status
+      debug:
+        msg: "{{ flask_container.stdout }}"
+
+    - name: Check Flask app logs (last 50 lines)
+      shell: sudo docker logs flask-app --tail 50 2>&1 || echo "Could not get logs"
+      register: flask_logs
+
+    - name: Show Flask app logs
+      debug:
+        msg: "{{ flask_logs.stdout_lines }}"
+
+    - name: Check if Flask app is responding
+      uri:
+        url: http://localhost:5000/health
+        method: GET
+        timeout: 5
+      register: health_check
+      ignore_errors: yes
+
+    - name: Show health check result
+      debug:
+        msg: "Health check status: {{ health_check.status | default('FAILED') }}"
+
+    - name: Check system resources
+      shell: |
+        echo "=== CPU Usage ==="
+        top -bn1 | grep "Cpu(s)" | head -1
+        echo "=== Memory Usage ==="
+        free -h
+        echo "=== Disk Usage ==="
+        df -h /
+      register: system_resources
+
+    - name: Show system resources
+      debug:
+        msg: "{{ system_resources.stdout_lines }}"
+
+    - name: Check if port 5000 is listening
+      shell: sudo netstat -tlnp | grep :5000 || sudo ss -tlnp | grep :5000 || echo "Port 5000 not listening"
+      register: port_check
+
+    - name: Show port status
+      debug:
+        msg: "{{ port_check.stdout }}"
+
