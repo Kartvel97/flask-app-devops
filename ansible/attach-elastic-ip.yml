@@ -6,7 +6,7 @@
   vars:
     instance_name: "flask-app-devops"
     region: "eu-central-1"
-    use_existing_eip: false  # Set to true if you want to use existing EIP
+    use_existing_eip: false  # использовать существующий EIP
 
   tasks:
     - name: Get current instance ID

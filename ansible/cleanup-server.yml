@@ -97,22 +97,16 @@
 
     - name: Clean up old log files
       shell: |
-        # Clean journal logs (keep last 3 days)
         sudo journalctl --vacuum-time=3d 2>/dev/null || true
-        # Clean old apt cache
         sudo apt-get clean 2>/dev/null || true
-        # Clean old package lists
         sudo apt-get autoclean 2>/dev/null || true
       register: log_cleanup
       failed_when: false
 
     - name: Clean temporary files
       shell: |
-        # Clean /tmp (files older than 7 days)
         find /tmp -type f -atime +7 -delete 2>/dev/null || true
-        # Clean /var/tmp (files older than 7 days)
         find /var/tmp -type f -atime +7 -delete 2>/dev/null || true
-        # Clean Ansible temp files
         rm -rf /home/ubuntu/.ansible/tmp/* 2>/dev/null || true
       register: temp_cleanup
       failed_when: false

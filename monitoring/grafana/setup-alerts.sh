@@ -14,13 +14,13 @@ if [ -z "$GRAFANA_PASSWORD" ]; then
 fi
 
 echo "Waiting for Grafana..."
-for i in {1..30}; do
+for i in {1..10}; do
     if curl -s -u "$GRAFANA_USER:$GRAFANA_PASSWORD" "$GRAFANA_URL/api/health" > /dev/null 2>&1; then
-        echo "Grafana is ready"
+        echo "Ready"
         break
     fi
-    if [ $i -eq 30 ]; then
-        echo "Grafana not ready after 30 attempts"
+    if [ $i -eq 10 ]; then
+        echo "Grafana not ready"
         exit 1
     fi
     sleep 2
@@ -35,7 +35,7 @@ if [ -z "$PROM_UID" ]; then
     PROM_UID="prometheus"
 fi
 
-echo "Creating alert rules..."
+echo "Creating alerts..."
 ALERT_GROUP='{
   "name": "flask-app-alerts",
   "interval": "30s",
@@ -128,9 +128,7 @@ RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 
 if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
-    echo "Alert rules created successfully"
+    echo "OK"
 else
-    echo "Failed to create alert rules (HTTP $HTTP_CODE)"
+    echo "Failed (HTTP $HTTP_CODE)"
 fi
-
-echo "Done!"

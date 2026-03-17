@@ -1,12 +1,7 @@
-# Backup Monitoring Alerts
-# Note: These alerts monitor disk space and system metrics related to backups
-# For backup age monitoring, use external monitoring or log-based alerts
-
 groups:
   - name: backup_alerts
     interval: 5m
     rules:
-      # Alert if backup directory disk space is getting low
       - alert: BackupDiskSpaceLow
         expr: |
           (
@@ -16,10 +11,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Low disk space for backups"
-          description: "Backup directory partition has less than 20% free space. Current: {{ $value | humanize }}% free."
+          summary: "Мало места на диске для бэкапов"
 
-      # Alert if disk space is critically low
       - alert: BackupDiskSpaceCritical
         expr: |
           (
@@ -29,10 +22,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Critical disk space for backups"
-          description: "Backup directory partition has less than 10% free space. Backups may fail soon. Current: {{ $value | humanize }}% free."
+          summary: "Критически мало места"
 
-      # Alert if backup directory inode usage is high
       - alert: BackupInodeUsageHigh
         expr: |
           (
@@ -42,6 +33,4 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "High inode usage in backup directory"
-          description: "Backup directory partition has less than 20% free inodes. Current: {{ $value | humanize }}% free inodes."
-
+          summary: "Много inode занято"
